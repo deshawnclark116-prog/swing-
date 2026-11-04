@@ -174,7 +174,10 @@ class OptionsBroker(ABC):
         data = {**self._extra, "positions": {k: asdict(v) for k, v in self.positions.items()},
                 "day": self.day, "log": self.log[-1000:]}
         data.update(self._state())
-        self.path.write_text(json.dumps(data, indent=2, default=str))
+        # write-then-rename so a reader never sees a half-written file
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        os.replace(tmp, self.path)
 
     def _state(self) -> dict:
         return {}

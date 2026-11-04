@@ -87,7 +87,10 @@ class StockBroker(ABC):
     def save(self) -> None:
         data = {**self._extra, "positions": {k: asdict(v) for k, v in self.positions.items()},
                 "day": self.day, "log": self.log[-1000:], **self._state()}
-        self.path.write_text(json.dumps(data, indent=2, default=str))
+        # write-then-rename so a reader never sees a half-written file
+        tmp = self.path.with_suffix(self.path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, indent=2, default=str))
+        os.replace(tmp, self.path)
 
     def start_day(self, today: date) -> None:
         if self.day.get("date") != today.isoformat():

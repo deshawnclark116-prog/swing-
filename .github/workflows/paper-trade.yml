@@ -51,22 +51,21 @@ jobs:
       - name: Trade (fake money) - both bots side by side
         if: steps.gate.outputs.go == 'true'
         run: |
-          python -m swing_bot options-trade --state paper/options_state.json \
-            --cash 100 --budget-pct 0.5 --exit-time 14:45 > options.log 2>&1 &
-          python -m swing_bot stocks-trade --state paper/stocks_state.json \
-            --cash 100 --budget-pct 0.5 --exit-time 14:45 > stocks.log 2>&1 &
-          wait || true
-          echo "===== OPTIONS BOT ====="; grep -v -i crumb options.log || true
-          echo "===== STOCK BOT ====="; grep -v -i crumb stocks.log || true
+          # save the accounts + REPORT.md every 10 minutes while the bots trade
+          ( while sleep 600; do scripts/save_results.sh "Paper trading update $(TZ=America/New_York date '+%F %H:%M')" \
+              paper/options_state.json paper/stocks_state.json; done ) &
+          SAVER=$!
+          python -u -m swing_bot options-trade --state paper/options_state.json \
+            --cash 100 --budget-pct 0.5 --exit-time 14:45 2>&1 \
+            | grep --line-buffered -v -i "crumb\|failed download\|delisted\|possibly" | sed -u 's/^/[options] /' &
+          P1=$!
+          python -u -m swing_bot stocks-trade --state paper/stocks_state.json \
+            --cash 100 --budget-pct 0.5 --exit-time 14:45 2>&1 \
+            | grep --line-buffered -v -i "crumb\|failed download\|delisted\|possibly" | sed -u 's/^/[stocks] /' &
+          P2=$!
+          wait $P1 $P2 || true
+          kill $SAVER || true
 
       - name: Save results to the repo
         if: always() && steps.gate.outputs.go == 'true'
-        run: |
-          python -m swing_bot report --state paper/options_state.json \
-            --stocks-state paper/stocks_state.json --premarket-state paper/premarket_state.json \
-            --out paper/REPORT.md
-          git config user.name "paper-trading-bot"
-          git config user.email "paper-trading-bot@users.noreply.github.com"
-          git add paper/
-          git commit -m "Paper trading results $(TZ=America/New_York date +%F)" || echo "nothing to save"
-          git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"
+        run: scripts/save_results.sh "Paper trading results $(TZ=America/New_York date +%F)" paper/options_state.json paper/stocks_state.json

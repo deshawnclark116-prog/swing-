@@ -47,22 +47,14 @@ jobs:
       - name: Trade premarket runners (fake money)
         if: steps.gate.outputs.go == 'true'
         run: |
-          python -m swing_bot premarket-trade --state paper/premarket_state.json \
+          ( while sleep 600; do scripts/save_results.sh "Premarket update $(TZ=America/New_York date '+%F %H:%M')" \
+              paper/premarket_state.json; done ) &
+          SAVER=$!
+          python -u -m swing_bot premarket-trade --state paper/premarket_state.json \
             --cash 100 --budget-pct 0.5 --exit-time 09:35 2>&1 \
-            | grep -v -i "crumb\|failed download\|delisted\|possibly\|^\[" || true
+            | grep --line-buffered -v -i "crumb\|failed download\|delisted\|possibly\|^\[\|ERROR $" || true
+          kill $SAVER || true
 
       - name: Save results to the repo
         if: always() && steps.gate.outputs.go == 'true'
-        run: |
-          git config user.name "paper-trading-bot"
-          git config user.email "paper-trading-bot@users.noreply.github.com"
-          for i in 1 2 3; do
-            git pull --rebase origin "${GITHUB_REF_NAME}" || true
-            python -m swing_bot report --state paper/options_state.json \
-              --stocks-state paper/stocks_state.json --premarket-state paper/premarket_state.json \
-              --out paper/REPORT.md
-            git add paper/
-            git commit -m "Premarket paper results $(TZ=America/New_York date +%F)" || { echo "nothing to save"; break; }
-            git push origin "HEAD:${GITHUB_REF_NAME}" && break
-            sleep 5
-          done
+        run: scripts/save_results.sh "Premarket paper results $(TZ=America/New_York date +%F)" paper/premarket_state.json
