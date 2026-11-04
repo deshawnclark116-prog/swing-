@@ -1,16 +1,45 @@
 {
   "positions": {},
   "day": {
-    "date": "2026-11-03",
-    "trades": 0,
-    "realized": 0.0,
+    "date": "2026-11-04",
+    "trades": 1,
+    "realized": 18.000000000000004,
     "start_cash": 100.0,
-    "traded": []
+    "traded": [
+      "FIS",
+      "KD",
+      "CIFR",
+      "DUOL",
+      "UNM",
+      "HUT"
+    ]
   },
-  "log": [],
+  "log": [
+    {
+      "t": "2026-11-04T09:53:48.681324-05:00",
+      "side": "buy",
+      "contract": "CIFR261106P00007000",
+      "qty": 1,
+      "price": 0.5
+    },
+    {
+      "t": "2026-11-04T15:00:44.328438-05:00",
+      "side": "sell",
+      "contract": "CIFR261106P00007000",
+      "qty": 1,
+      "price": 0.68,
+      "pnl": 18.0,
+      "reason": "time"
+    }
+  ],
   "account": {
-    "settled": 100.0,
-    "unsettled": []
+    "settled": 50.0,
+    "unsettled": [
+      [
+        "2026-11-05",
+        68.0
+      ]
+    ]
   },
   "starting_cash": 100.0
 }
