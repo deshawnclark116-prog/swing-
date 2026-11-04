@@ -5,7 +5,7 @@ import pytest
 
 from swing_bot.cash_account import CashAccount, next_business_day
 from swing_bot.daytrade import (DayTradeRules, OptionsDayTrader, PaperOptionsBroker, entry_signal,
-                                premium_exit, vwap)
+                                opening_range, opening_rvol, premium_exit, setup_qualifies, vwap)
 from swing_bot.options_chain import ContractConfig, pick_contract
 from swing_bot.premarket import NY, premarket_stats
 from swing_bot.stock_daytrade import PaperStockBroker, StockDayTrader, StockRules, share_size, stop_level
@@ -50,7 +50,7 @@ def test_vwap_and_entry_signal():
 
 
 def test_premium_exit_rules():
-    r = DayTradeRules()
+    r = DayTradeRules(stop_pct=0.30, target_pct=1.0, trail_trigger_pct=0.30, trail_pct=0.15)
     assert premium_exit(1.0, 1.0, 0.69, r) == "stop"
     assert premium_exit(1.0, 2.0, 2.0, r) == "target"
     assert premium_exit(1.0, 1.5, 1.27, r) == "trail"      # 15% off a +50% peak
@@ -106,8 +106,9 @@ def test_options_trader_enters_and_stops_out(tmp_path):
     chain = FakeChain()
     broker = PaperOptionsBroker(tmp_path / "o.json", starting_cash=5000, source=chain)
     df = make_day([11.0, 11.5], [11.4, 11.6, 11.8, 12.0, 12.1, 12.2, 12.3])
-    trader = OptionsDayTrader(broker, {"XYZ": "call"}, chain_source=chain,
-                              bars_loader=lambda syms: {"XYZ": df})
+    rules = DayTradeRules(entry_mode="pm", min_rvol_call=0, entry_start=time(9, 35), stop_pct=0.30)
+    trader = OptionsDayTrader(broker, {"XYZ": "call"}, rules=rules, chain_source=chain,
+                              bars_loader=lambda syms: {"XYZ": df}, hist_loader=lambda s: {})
     events = trader.step(at(9, 37))
     assert any(e.startswith("BUY") for e in events)
     assert broker.account.settled == pytest.approx(5000 - 4 * 105)  # 10% budget -> 4 contracts
@@ -147,3 +148,53 @@ def test_stock_trader_cycle(tmp_path):
     assert any("(stop)" in e for e in events) and not broker.positions
     assert broker.day["realized"] < 0
     assert broker.account.pending > 0          # unsettled until next business day
+
+
+# ---------------------------------------------------------------- tested-setup rules
+def test_opening_range_waits_for_window():
+    reg = make_day([], [10 + 0.1 * i for i in range(20)]).iloc[1:]
+    assert opening_range(reg.iloc[:10], 15) is None          # only 10 minutes in
+    hi, lo = opening_range(reg, 15)
+    assert hi == pytest.approx(11.4 * 1.001) and lo == pytest.approx(10 * 0.999)
+
+
+def test_opening_rvol():
+    frames = []
+    for k, d in enumerate(pd.bdate_range("2026-10-20", "2026-11-03")):
+        idx = pd.date_range(pd.Timestamp(datetime.combine(d.date(), time(9, 30)), tz=NY), periods=30, freq="1min")
+        vol = 3000 if d.date() == DAY else 1000
+        frames.append(pd.DataFrame({"open": 1, "high": 1, "low": 1, "close": 1, "volume": vol}, index=idx))
+    df = pd.concat(frames)
+    assert opening_rvol(df, DAY, 15) == pytest.approx(3.0)
+
+
+def test_setup_qualifies_per_side():
+    r = DayTradeRules()
+    assert setup_qualifies({"gap_pct": 4.0}, "call", 3.0, r)
+    assert not setup_qualifies({"gap_pct": 4.0}, "call", 1.2, r)      # volume too light
+    assert not setup_qualifies({"gap_pct": 4.0}, "call", float("nan"), r)
+    assert setup_qualifies({"gap_pct": -6.0}, "put", float("nan"), r)
+    assert not setup_qualifies({"gap_pct": -4.0}, "put", 5.0, r)      # puts need a 5% gap
+
+
+def test_options_stock_stop_and_noon_exit(tmp_path):
+    chain = FakeChain()
+    broker = PaperOptionsBroker(tmp_path / "o.json", starting_cash=5000, source=chain)
+    rules = DayTradeRules(entry_mode="pm", min_rvol_call=0, entry_start=time(9, 35))
+    df = make_day([11.0, 11.5], [11.4, 11.6, 11.8, 12.0, 12.1, 12.2, 12.3])
+    trader = OptionsDayTrader(broker, {"XYZ": "call"}, rules=rules, chain_source=chain,
+                              bars_loader=lambda s: {"XYZ": df}, hist_loader=lambda s: {})
+    trader.step(at(9, 37))
+    (pos,) = broker.positions.values()
+    assert pos.under_entry == pytest.approx(12.3)
+    # stock drops ~4% -> stock stop even though the option quote hasn't moved
+    drop = pd.concat([df, make_day([], [11.75]).iloc[1:].set_axis([pd.Timestamp(at(9, 37))])])
+    trader.bars_loader = lambda s: {"XYZ": drop}
+    assert any("(stock stop)" in e for e in trader.step(at(9, 38)))
+
+    broker2 = PaperOptionsBroker(tmp_path / "o2.json", starting_cash=5000, source=chain)
+    t2 = OptionsDayTrader(broker2, {"XYZ": "call"}, rules=rules, chain_source=chain,
+                          bars_loader=lambda s: {"XYZ": df}, hist_loader=lambda s: {})
+    t2.step(at(9, 37))
+    assert not any("SELL" in e for e in t2.step(at(11, 59)))
+    assert any("(time)" in e for e in t2.step(at(12, 0)))            # calls are out by noon

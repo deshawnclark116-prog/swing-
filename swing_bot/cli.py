@@ -176,11 +176,13 @@ def cmd_gap_backtest(args, cfg) -> int:
     universe = sorted(set(args.symbols or []) or (set(screener_quotes(sc.screeners)) | set(sc.watchlist)))
     print(f"Backtesting gap-and-go on {len(universe)} symbols, 5-min bars, last ~60 days...")
     bars = yahoo_intraday(universe, period="60d", interval="5m")
-    # apply the system's price filter using each symbol's latest price
-    bars = {s: d for s, d in bars.items() if sc.min_price <= d["close"].iloc[-1] <= sc.max_price}
-    trades = gap_backtest.run(bars, min_gap_pct=sc.min_gap_pct, stock_stop_pct=args.stock_stop)
-    if args.system == "smallcap" and not trades.empty:
-        trades = trades[trades["kind"] == "call"]  # long only
+    from .daytrade import DayTradeRules
+
+    rules = DayTradeRules(stock_stop_pct=args.stock_stop)
+    if args.system == "smallcap":  # long-only shares, bigger gaps, no volume/noon rules tested yet
+        rules = DayTradeRules(stock_stop_pct=args.stock_stop, min_gap_call=sc.min_gap_pct,
+                              min_gap_put=1e9, min_rvol_call=0, call_exit_time=rules.exit_time)
+    trades = gap_backtest.run(bars, rules, sc.min_price, sc.max_price)
     print(gap_backtest.summarize(trades))
     print("\nNote: the universe is today's movers, so this is optimistic (survivorship/selection bias).")
     if args.trades_csv and not trades.empty:

@@ -74,8 +74,10 @@ There are two separate systems, because most small caps have no tradeable option
 |---|---|---|
 | Stocks | Liquid names with tight option spreads | $1–$20 stocks gapping 10% or more |
 | Direction | Calls on gap-ups, puts on gap-downs | Long only (a cash account can't short) |
-| Entry | First 1-min close beyond the premarket high or low, on the right side of VWAP | Same, upside only |
-| Exits | Premium -30% stop, +100% target, trailing stop after +30%, stock loses VWAP, 3:45pm | Stop below the signal bar or VWAP (5% max), breakeven at +1R, 2R target, loses VWAP, 3:45pm |
+| Filter | Calls: gap up 3% or more AND opening volume at least 2.5x normal. Puts: gap down 5% or more | Gap up 10% or more |
+| Entry | After 9:45, a 1-min close beyond the 15-minute opening range, on the right side of VWAP | 1-min close above the premarket high and VWAP |
+| Exits | Stock moves 1.5% against the entry, calls closed by noon, puts by 3:45. Safety nets on the option: -50% stop, +200% target | Stop below the signal bar or VWAP (5% max), breakeven at +1R, 2R target, loses VWAP, 3:45pm |
+| Status | Selected by out-of-sample testing (see below) | **Not validated.** Free data can't find enough small-cap runners. Paper only |
 | Sizing | 10% of settled cash per trade | Risk 2% of settled cash, at most 25% in one position |
 
 Both systems trade only with **settled** cash (T+1), so they can't cause good-faith violations. Each is limited to 3 trades a day and stops trading for the day after a set loss.
@@ -91,3 +93,12 @@ python -m swing_bot gap-backtest --system options # test the signal on the last 
 ```
 
 **Data limits:** Yahoo's free data is delayed, doesn't report premarket volume, and its movers lists don't show fresh premarket gappers. For live use, switch the data source to Alpaca or another real-time feed.
+
+## How the options rules were chosen (and how much to trust them)
+
+`research/gap_variants.py` tested 96 variants (entry type, gap size, relative volume, SPY filter, exit style) on about 60 days of 5-minute data for 289 liquid names. Each variant was tuned on the first half of the days and then judged on the second half.
+
+- Averaged across all 96 variants, the result on the unseen half was about **0%**. Most setups that look good in testing don't hold up.
+- Two setups held up, and both match standard momentum-trading practice. **Calls:** opening-range breakout with heavy opening volume (2.5x or more), out by noon. **Puts:** opening-range breakdown on gaps of 5% or more.
+- With the bot's exact rules (`gap-backtest`), the result is 180 trades, a 49% win rate, and **+0.77% average stock move per trade**, with **+0.59%** on the unseen half. A move of about +0.5% is needed to cover option spreads and time decay. **The edge is thin.**
+- **Caveats:** 60 days is short and covers one market environment. The universe is today's movers (selection bias), and the option profit and loss is not simulated. Paper trade for at least a month and compare against this backtest before risking money.

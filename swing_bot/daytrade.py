@@ -41,13 +41,25 @@ class DayTradeRules:
     budget_pct: float = 0.10          # max premium per trade, as a fraction of settled cash
     max_trades_per_day: int = 3
     daily_loss_limit_pct: float = 0.10  # stop for the day after losing 10% of the morning's cash
-    stop_pct: float = 0.30
-    target_pct: float = 1.00
-    trail_trigger_pct: float = 0.30
-    trail_pct: float = 0.15
-    entry_start: time = time(9, 35)   # let the opening chaos settle
+    # Exits. The tested setups exit on a stock-price stop or the clock; the premium
+    # stop/target/trail below are wide safety nets on top of that.
+    stock_stop_pct: float = 1.5       # exit if the STOCK moves 1.5% against us from entry
+    exit_on_vwap: bool = False        # VWAP exits tested worse - off by default
+    stop_pct: float = 0.50            # option premium down 50%
+    target_pct: float = 2.00          # option premium up 200%
+    trail_trigger_pct: float = 1.00   # once up 100%...
+    trail_pct: float = 0.30           # ...give back at most 30% from the peak
+    # Entry: settings chosen by out-of-sample testing (see research/gap_variants.py)
+    entry_mode: str = "orb"           # "orb" = break of the opening range, "pm" = premarket high/low
+    or_minutes: int = 15              # opening range = first 15 minutes
+    min_gap_call: float = 3.0         # gap-up % needed for calls
+    min_gap_put: float = 5.0          # gap-down % needed for puts
+    min_rvol_call: float = 2.5        # calls need opening volume >= 2.5x normal
+    min_rvol_put: float = 0.0
+    entry_start: time = time(9, 45)   # wait for the opening range to form
     entry_end: time = time(11, 0)     # gap-and-go is a morning setup
-    exit_time: time = time(15, 45)
+    call_exit_time: time = time(12, 0)  # call momentum fades after the morning
+    exit_time: time = time(15, 45)    # hard close for everything
 
 
 # ---------------------------------------------------------------- signals
@@ -55,6 +67,48 @@ def vwap(bars: pd.DataFrame) -> pd.Series:
     tp = (bars["high"] + bars["low"] + bars["close"]) / 3
     cum_v = bars["volume"].cumsum()
     return ((tp * bars["volume"]).cumsum() / cum_v.where(cum_v > 0)).fillna(bars["close"])
+
+
+def _window_mask(idx: pd.DatetimeIndex, minutes: int):
+    t = idx.hour * 60 + idx.minute
+    return (t >= 9 * 60 + 30) & (t < 9 * 60 + 30 + minutes)
+
+
+def opening_range(reg: pd.DataFrame, minutes: int = 15) -> tuple[float, float] | None:
+    """High/low of the first `minutes` of the session, once that window is complete."""
+    if reg.empty:
+        return None
+    first = reg[_window_mask(reg.index, minutes)]
+    last_t = reg.index[-1].hour * 60 + reg.index[-1].minute
+    bar_min = max(int((reg.index[1] - reg.index[0]).total_seconds() // 60), 1) if len(reg) > 1 else 1
+    if first.empty or last_t + bar_min < 9 * 60 + 30 + minutes:
+        return None
+    return float(first["high"].max()), float(first["low"].min())
+
+
+def opening_rvol(df: pd.DataFrame, day: date, minutes: int = 15, lookback: int = 10) -> float:
+    """Volume in today's first `minutes` vs the average of the previous `lookback` days."""
+    df = df[_window_mask(df.index, minutes)]
+    vols = df.groupby(df.index.date)["volume"].sum()
+    if day not in vols.index:
+        return float("nan")
+    prev = vols[vols.index < day].tail(lookback)
+    if len(prev) < 5 or prev.mean() <= 0:
+        return float("nan")
+    return float(vols[day] / prev.mean())
+
+
+def setup_qualifies(st: dict, kind: str, rvol: float, rules: "DayTradeRules") -> bool:
+    gap = st["gap_pct"]
+    if kind == "call":
+        return gap >= rules.min_gap_call and (rules.min_rvol_call <= 0 or rvol >= rules.min_rvol_call)
+    return gap <= -rules.min_gap_put and (rules.min_rvol_put <= 0 or rvol >= rules.min_rvol_put)
+
+
+def breakout_levels(reg: pd.DataFrame, st: dict, rules: "DayTradeRules") -> tuple[float, float] | None:
+    if rules.entry_mode == "orb":
+        return opening_range(reg, rules.or_minutes)
+    return st["pm_high"], st["pm_low"]
 
 
 def entry_signal(reg: pd.DataFrame, pm_high: float, pm_low: float, kind: str) -> bool:
@@ -97,6 +151,7 @@ class OptionPosition:
     entry: float
     peak: float
     opened_at: str
+    under_entry: float | None = None  # stock price when we bought
 
     @property
     def c(self) -> Contract:
@@ -142,9 +197,9 @@ class OptionsBroker(ABC):
     @abstractmethod
     def _execute_sell(self, p: OptionPosition, price: float, today: date) -> None: ...
 
-    def buy(self, c: Contract, qty: int, price: float, now: datetime) -> None:
+    def buy(self, c: Contract, qty: int, price: float, now: datetime, under_price: float | None = None) -> None:
         self._execute_buy(c, qty, price)
-        self.positions[c.symbol] = OptionPosition(asdict(c), qty, price, price, now.isoformat())
+        self.positions[c.symbol] = OptionPosition(asdict(c), qty, price, price, now.isoformat(), under_price)
         self.day["trades"] += 1
         self.day["traded"].append(c.underlying)
         self.log.append({"t": now.isoformat(), "side": "buy", "contract": c.symbol, "qty": qty,
@@ -240,7 +295,7 @@ class AlpacaOptionsBroker(OptionsBroker):
 class OptionsDayTrader:
     def __init__(self, broker: OptionsBroker, watch: dict[str, str],
                  rules: DayTradeRules | None = None, contract_cfg: ContractConfig | None = None,
-                 bars_loader=None, chain_source=None, dry_run: bool = False):
+                 bars_loader=None, chain_source=None, dry_run: bool = False, hist_loader=None):
         """watch = {symbol: "call" | "put"} from the premarket scan."""
         self.broker = broker
         self.watch = watch
@@ -249,6 +304,23 @@ class OptionsDayTrader:
         self.bars_loader = bars_loader or (lambda syms: yahoo_intraday(syms, period="2d", interval="1m"))
         self.chain_source = chain_source or YahooOptions()
         self.dry_run = dry_run
+        self.hist_loader = hist_loader or (lambda syms: yahoo_intraday(syms, period="20d", interval="5m"))
+        self._hist: dict[str, pd.DataFrame] | None = None
+
+    def _rvol(self, sym: str, reg: pd.DataFrame, day: date) -> float:
+        """Opening relative volume: today's first minutes vs the last 10 sessions."""
+        if self._hist is None:
+            try:
+                self._hist = {s: to_ny(d) for s, d in self.hist_loader(list(self.watch)).items()}
+            except Exception as e:
+                log.warning("history for relative volume unavailable: %s", e)
+                self._hist = {}
+        hist = self._hist.get(sym)
+        if hist is None:
+            return float("nan")
+        past = hist[hist.index.date < day]
+        combined = pd.concat([past, reg])
+        return opening_rvol(combined, day, self.rules.or_minutes)
 
     def _halted(self) -> bool:
         d = self.broker.day
@@ -276,9 +348,16 @@ class OptionsDayTrader:
                 continue
             pos.peak = max(pos.peak, bid)
             reason = premium_exit(pos.entry, pos.peak, bid, self.rules)
-            if reason is None and c.underlying in today_reg and momentum_lost(today_reg[c.underlying][1], c.kind):
+            reg_u = today_reg.get(c.underlying, (None, pd.DataFrame()))[1]
+            if reason is None and pos.under_entry and not reg_u.empty:
+                last = float(reg_u["close"].iloc[-1])
+                against = (pos.under_entry - last) if c.kind == "call" else (last - pos.under_entry)
+                if against / pos.under_entry * 100 >= self.rules.stock_stop_pct:
+                    reason = "stock stop"
+            if reason is None and self.rules.exit_on_vwap and momentum_lost(reg_u, c.kind):
                 reason = "lost VWAP"
-            if reason is None and now.time() >= self.rules.exit_time:
+            cutoff = self.rules.call_exit_time if c.kind == "call" else self.rules.exit_time
+            if reason is None and now.time() >= min(cutoff, self.rules.exit_time):
                 reason = "time"
             if reason:
                 msg = f"SELL {pos.qty} {c} @ {bid:.2f} ({reason})"
@@ -302,7 +381,15 @@ class OptionsDayTrader:
                 continue
             full, reg = today_reg[sym]
             st = premarket_stats(full, now.date())
-            if st is None or not entry_signal(reg, st["pm_high"], st["pm_low"], kind):
+            if st is None:
+                continue
+            rvol = self._rvol(sym, reg, now.date())
+            if not setup_qualifies(st, kind, rvol, self.rules):
+                self.broker.day["traded"].append(sym)  # gap/volume don't change after the open range
+                events.append(f"{sym}: skipped (gap {st['gap_pct']:+.1f}%, opening volume {rvol:.1f}x)")
+                continue
+            levels = breakout_levels(reg, st, self.rules)
+            if levels is None or not entry_signal(reg, levels[0], levels[1], kind):
                 continue
             spot = float(reg["close"].iloc[-1])
             budget = self.broker.buying_power() * self.rules.budget_pct
@@ -318,7 +405,7 @@ class OptionsDayTrader:
             if self.dry_run:
                 self.broker.day["traded"].append(sym)
             else:
-                self.broker.buy(c, qty, c.ask, now)
+                self.broker.buy(c, qty, c.ask, now, under_price=spot)
             events.append(msg)
         return events
 
@@ -336,7 +423,7 @@ class OptionsDayTrader:
                 continue
             for e in self.step(now):
                 log.warning(e)
-            if now.time() >= self.rules.exit_time and not self.broker.positions:
+            if now.time() >= self.rules.entry_end and not self.broker.positions:
                 log.warning("done for the day. realized P&L: $%.2f", self.broker.day.get("realized", 0))
                 return
             _time.sleep(poll_seconds)
