@@ -131,8 +131,10 @@ class PaperStockBroker(StockBroker):
         self.account = (CashAccount.from_dict(self._extra["account"]) if "account" in self._extra
                         else CashAccount(starting_cash))
 
+        self.starting_cash = self._extra.get("starting_cash", starting_cash)
+
     def _state(self) -> dict:
-        return {"account": self.account.to_dict()}
+        return {"account": self.account.to_dict(), "starting_cash": self.starting_cash}
 
     def start_day(self, today: date) -> None:
         self.account.settle(today)
@@ -281,7 +283,7 @@ class StockDayTrader:
                 continue
             for e in self.step(now):
                 log.warning(e)
-            if now.time() >= self.rules.exit_time and not self.broker.positions:
+            if now.time() >= self.rules.entry_end and not self.broker.positions:
                 log.warning("done for the day. realized P&L: $%.2f", self.broker.day.get("realized", 0))
                 return
             _time.sleep(poll_seconds)

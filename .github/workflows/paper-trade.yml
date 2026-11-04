@@ -1,6 +1,6 @@
-# Runs the options day-trading bot with FAKE money every weekday morning,
-# then saves the account and a results report back to this repo (paper/REPORT.md).
-name: Paper trade (options)
+# Runs BOTH day-trading bots with FAKE money every weekday morning ($100 each),
+# then saves the accounts and a results report back to this repo (paper/REPORT.md).
+name: Paper trade
 
 on:
   schedule:
@@ -47,19 +47,22 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: pip install pandas numpy yfinance
 
-      - name: Trade (fake money)
+      - name: Trade (fake money) - both bots side by side
         if: steps.gate.outputs.go == 'true'
         run: |
-          python -m swing_bot options-trade \
-            --state paper/options_state.json \
-            --cash 100 \
-            --budget-pct 0.5 \
-            --exit-time 15:00
+          python -m swing_bot options-trade --state paper/options_state.json \
+            --cash 100 --budget-pct 0.5 --exit-time 15:00 > options.log 2>&1 &
+          python -m swing_bot stocks-trade --state paper/stocks_state.json \
+            --cash 100 --budget-pct 0.5 --exit-time 15:00 > stocks.log 2>&1 &
+          wait || true
+          echo "===== OPTIONS BOT ====="; grep -v -i crumb options.log || true
+          echo "===== STOCK BOT ====="; grep -v -i crumb stocks.log || true
 
       - name: Save results to the repo
         if: always() && steps.gate.outputs.go == 'true'
         run: |
-          python -m swing_bot report --state paper/options_state.json --out paper/REPORT.md
+          python -m swing_bot report --state paper/options_state.json \
+            --stocks-state paper/stocks_state.json --out paper/REPORT.md
           git config user.name "paper-trading-bot"
           git config user.email "paper-trading-bot@users.noreply.github.com"
           git add paper/

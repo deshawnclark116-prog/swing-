@@ -172,9 +172,18 @@ def cmd_stocks_trade(args, cfg) -> int:
     watch = scan(SMALLCAP_SCAN, with_news=False)
     syms = list(watch["symbol"]) if not watch.empty else []
     print(f"Watching: {syms or 'nothing'}")
+    from datetime import time as dtime
+
+    from .stock_daytrade import StockRules
+
     broker = (AlpacaStockBroker() if args.broker == "alpaca"
               else PaperStockBroker(args.state or "stocks_paper_state.json", starting_cash=args.cash))
-    return _loop_or_once(StockDayTrader(broker, syms, dry_run=args.dry_run), args)
+    rules = StockRules()
+    if args.budget_pct:
+        rules.budget_pct = args.budget_pct
+    if args.exit_time:
+        rules.exit_time = dtime.fromisoformat(args.exit_time)
+    return _loop_or_once(StockDayTrader(broker, syms, rules=rules, dry_run=args.dry_run), args)
 
 
 def cmd_gap_backtest(args, cfg) -> int:
@@ -215,9 +224,9 @@ def cmd_accounts(args, cfg) -> int:
 
 
 def cmd_report(args, cfg) -> int:
-    from .report import options_report
+    from .report import full_report
 
-    text = options_report(args.state)
+    text = full_report(args.state, args.stocks_state)
     if args.out:
         from pathlib import Path
 
@@ -279,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--dry-run", action="store_true", help="show trades without placing them")
         sp.add_argument("--once", action="store_true", help="run one check instead of looping all day")
         sp.add_argument("--state", help="paper account state file")
-        sp.add_argument("--budget-pct", type=float, help="max share of settled cash per trade (options)")
+        sp.add_argument("--budget-pct", type=float, help="max share of settled cash per trade")
         sp.add_argument("--exit-time", help="hard close time ET, e.g. 15:00")
         sp.set_defaults(func=fn, **{**none, "cash": 5_000})
 
@@ -291,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
     gb.set_defaults(func=cmd_gap_backtest, cash=None, risk=None, max_positions=None)
 
     rp = sub.add_parser("report", help="write a Markdown results report for a paper options account")
-    rp.add_argument("--state", default="options_paper_state.json")
+    rp.add_argument("--state", default="options_paper_state.json", help="options paper account")
+    rp.add_argument("--stocks-state", help="stocks paper account (optional)")
     rp.add_argument("--out", help="file to write (default: print)")
     rp.set_defaults(func=cmd_report, **none)
 

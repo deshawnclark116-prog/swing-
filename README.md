@@ -105,11 +105,13 @@ python -m swing_bot gap-backtest --system options # test the signal on the last 
 
 ## Automatic paper trading on GitHub
 
-`.github/workflows/paper-trade.yml` runs the options bot with **fake money** every weekday:
-- It starts at 9:20am New York time, scans the premarket, and trades.
-- The account starts at **$100**, with up to 50% per trade, since smaller trades can't buy a contract.
+`.github/workflows/paper-trade.yml` runs **both bots** with **fake money** every weekday:
+- They start at 9:20am New York time, scan the premarket, and trade.
+- **Each bot has its own $100**, with up to 50% per trade.
 - Calls close by noon and everything is closed by 3:00pm.
-- It saves the account to `paper/options_state.json` and the results to **`paper/REPORT.md`**.
+- The accounts are saved to `paper/options_state.json` and `paper/stocks_state.json`, and the combined results go to **`paper/REPORT.md`**.
 
-To check results, open `paper/REPORT.md` on GitHub. To run it by hand, go to **Actions → Paper trade (options) → Run workflow**.
-To start over, delete `paper/options_state.json`.
+**Why the bots don't buy premarket:** `research/premarket_shares.py` tested buying small caps that were already up 10% or more on a new premarket high. It tried 108 variants, starting from 4am, 7am, or 8am, with different stops and exits. **Every variant lost money**, about -1% per trade even before premarket spreads. Options also don't trade before 9:30, so the bots use the premarket to pick stocks and trade after the open.
+
+To check results, open `paper/REPORT.md` on GitHub. To run it by hand, go to **Actions → Paper trade → Run workflow**.
+To start over, delete the `paper/*_state.json` files.
