@@ -226,8 +226,10 @@ class PaperOptionsBroker(OptionsBroker):
         self.account = (CashAccount.from_dict(self._extra["account"]) if "account" in self._extra
                         else CashAccount(starting_cash))
 
+        self.starting_cash = self._extra.get("starting_cash", starting_cash)
+
     def _state(self) -> dict:
-        return {"account": self.account.to_dict()}
+        return {"account": self.account.to_dict(), "starting_cash": self.starting_cash}
 
     def start_day(self, today: date) -> None:
         self.account.settle(today)

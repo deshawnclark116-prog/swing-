@@ -147,14 +147,22 @@ def _loop_or_once(trader, args):
 
 
 def cmd_options_trade(args, cfg) -> int:
-    from .daytrade import AlpacaOptionsBroker, OptionsDayTrader, PaperOptionsBroker
+    from datetime import time as dtime
+
+    from .daytrade import AlpacaOptionsBroker, DayTradeRules, OptionsDayTrader, PaperOptionsBroker
     from .premarket import OPTIONS_SCAN, scan
 
     watch = scan(OPTIONS_SCAN, with_news=False)
     watch_map = dict(zip(watch["symbol"], watch["direction"])) if not watch.empty else {}
     print(f"Watching: {watch_map or 'nothing'}")
-    broker = AlpacaOptionsBroker() if args.broker == "alpaca" else PaperOptionsBroker(starting_cash=args.cash)
-    return _loop_or_once(OptionsDayTrader(broker, watch_map, dry_run=args.dry_run), args)
+    broker = (AlpacaOptionsBroker() if args.broker == "alpaca"
+              else PaperOptionsBroker(args.state or "options_paper_state.json", starting_cash=args.cash))
+    rules = DayTradeRules()
+    if args.budget_pct:
+        rules.budget_pct = args.budget_pct
+    if args.exit_time:
+        rules.exit_time = dtime.fromisoformat(args.exit_time)
+    return _loop_or_once(OptionsDayTrader(broker, watch_map, rules=rules, dry_run=args.dry_run), args)
 
 
 def cmd_stocks_trade(args, cfg) -> int:
@@ -164,7 +172,8 @@ def cmd_stocks_trade(args, cfg) -> int:
     watch = scan(SMALLCAP_SCAN, with_news=False)
     syms = list(watch["symbol"]) if not watch.empty else []
     print(f"Watching: {syms or 'nothing'}")
-    broker = AlpacaStockBroker() if args.broker == "alpaca" else PaperStockBroker(starting_cash=args.cash)
+    broker = (AlpacaStockBroker() if args.broker == "alpaca"
+              else PaperStockBroker(args.state or "stocks_paper_state.json", starting_cash=args.cash))
     return _loop_or_once(StockDayTrader(broker, syms, dry_run=args.dry_run), args)
 
 
@@ -202,6 +211,19 @@ def cmd_accounts(args, cfg) -> int:
             print(f"  open: {k} {asdict_safe(p)}")
         for e in b.log[-10:]:
             print(f"  log: {e}")
+    return 0
+
+
+def cmd_report(args, cfg) -> int:
+    from .report import options_report
+
+    text = options_report(args.state)
+    if args.out:
+        from pathlib import Path
+
+        Path(args.out).write_text(text)
+    else:
+        print(text)
     return 0
 
 
@@ -256,6 +278,9 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--cash", type=float, default=5_000, help="starting cash for the paper account")
         sp.add_argument("--dry-run", action="store_true", help="show trades without placing them")
         sp.add_argument("--once", action="store_true", help="run one check instead of looping all day")
+        sp.add_argument("--state", help="paper account state file")
+        sp.add_argument("--budget-pct", type=float, help="max share of settled cash per trade (options)")
+        sp.add_argument("--exit-time", help="hard close time ET, e.g. 15:00")
         sp.set_defaults(func=fn, **{**none, "cash": 5_000})
 
     gb = sub.add_parser("gap-backtest", help="test the gap-and-go signal on the last ~60 days")
@@ -264,6 +289,11 @@ def main(argv: list[str] | None = None) -> int:
     gb.add_argument("--stock-stop", type=float, default=1.5, help="stop, %% move against the stock")
     gb.add_argument("--trades-csv")
     gb.set_defaults(func=cmd_gap_backtest, cash=None, risk=None, max_positions=None)
+
+    rp = sub.add_parser("report", help="write a Markdown results report for a paper options account")
+    rp.add_argument("--state", default="options_paper_state.json")
+    rp.add_argument("--out", help="file to write (default: print)")
+    rp.set_defaults(func=cmd_report, **none)
 
     ac = sub.add_parser("accounts", help="show both day-trading paper accounts")
     ac.set_defaults(func=cmd_accounts, **none)

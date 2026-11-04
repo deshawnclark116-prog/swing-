@@ -1,0 +1,67 @@
+# Runs the options day-trading bot with FAKE money every weekday morning,
+# then saves the account and a results report back to this repo (paper/REPORT.md).
+name: Paper trade (options)
+
+on:
+  schedule:
+    # GitHub schedules use UTC. These two cover 9:20am New York time in both
+    # daylight saving (13:20 UTC) and standard time (14:20 UTC); the gate step
+    # below makes sure only the right one actually trades.
+    - cron: "20 13 * * 1-5"
+    - cron: "20 14 * * 1-5"
+  workflow_dispatch: {}   # "Run workflow" button for a manual run
+
+permissions:
+  contents: write         # to save the account + report back to the repo
+
+concurrency:
+  group: paper-trade
+  cancel-in-progress: false
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355  # GitHub's max is 360
+    steps:
+      - name: Only run near the open (New York time)
+        id: gate
+        run: |
+          NOW=$(TZ=America/New_York date +%H%M)
+          echo "New York time: $NOW"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$NOW" -ge 0900 ] && [ "$NOW" -le 1015 ]; }; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"; echo "Not market-open time - skipping."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        if: steps.gate.outputs.go == 'true'
+        run: pip install pandas numpy yfinance
+
+      - name: Trade (fake money)
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          python -m swing_bot options-trade \
+            --state paper/options_state.json \
+            --cash 100 \
+            --budget-pct 0.5 \
+            --exit-time 15:00
+
+      - name: Save results to the repo
+        if: always() && steps.gate.outputs.go == 'true'
+        run: |
+          python -m swing_bot report --state paper/options_state.json --out paper/REPORT.md
+          git config user.name "paper-trading-bot"
+          git config user.email "paper-trading-bot@users.noreply.github.com"
+          git add paper/
+          git commit -m "Paper trading results $(TZ=America/New_York date +%F)" || echo "nothing to save"
+          git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -24,6 +24,7 @@ class ContractConfig:
     min_dte: int = 1
     max_dte: int = 10
     itm_pct: float = 0.0          # 0.02 = prefer a strike ~2% in the money
+    max_otm_pct: float = 0.03     # never buy strikes more than 3% out of the money (no lottery tickets)
     max_spread_pct: float = 0.12  # (ask - bid) / mid
     min_open_interest: int = 100
     min_volume: int = 50
@@ -109,6 +110,10 @@ def pick_contract(underlying: str, kind: str, spot: float, budget: float,
         tbl = tbl[((tbl["ask"] - tbl["bid"]) / mid <= cfg.max_spread_pct)
                   & ((tbl["openInterest"] >= cfg.min_open_interest) | (tbl["volume"] >= cfg.min_volume))
                   & (tbl["ask"] * 100 <= budget)]
+        if kind == "call":
+            tbl = tbl[tbl["strike"] <= spot * (1 + cfg.max_otm_pct)]
+        else:
+            tbl = tbl[tbl["strike"] >= spot * (1 - cfg.max_otm_pct)]
         if tbl.empty:
             continue
         # In the money = below spot for calls, above spot for puts.

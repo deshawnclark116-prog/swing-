@@ -198,3 +198,28 @@ def test_options_stock_stop_and_noon_exit(tmp_path):
     t2.step(at(9, 37))
     assert not any("SELL" in e for e in t2.step(at(11, 59)))
     assert any("(time)" in e for e in t2.step(at(12, 0)))            # calls are out by noon
+
+
+def test_pick_contract_refuses_far_otm_lottery_tickets():
+    # spot 10: affordable strikes are only 12+ (far OTM) -> refuse instead of buying a lottery ticket
+    class Chain(FakeChain):
+        def chain(self, s, e):
+            calls, puts = super().chain(s, e)
+            calls = calls.assign(ask=[5.0, 5.0, 5.0, 5.0, 0.30, 0.20, 0.10], bid=[4.9] * 4 + [0.28, 0.19, 0.09])
+            return calls, puts
+    assert pick_contract("XYZ", "call", 10.0, budget=100, source=Chain(), today=DAY) is None
+    c = pick_contract("XYZ", "call", 11.8, budget=100, source=Chain(), today=DAY)
+    assert c.strike == 12.0                                          # 1.7% OTM is fine
+
+
+def test_report_renders(tmp_path):
+    from swing_bot.report import options_report
+    assert "No trades yet" in options_report(tmp_path / "missing.json")
+    chain = FakeChain()
+    broker = PaperOptionsBroker(tmp_path / "o.json", starting_cash=200, source=chain)
+    c = pick_contract("XYZ", "call", 11.6, 200, source=chain, today=DAY)
+    broker.start_day(DAY)
+    broker.buy(c, 1, c.ask, at(9, 50), 11.6)
+    broker.sell(c.symbol, 1.30, "time", at(12, 0))
+    text = options_report(tmp_path / "o.json")
+    assert "Started with | $200.00" in text and "$+25.00" in text and "| Winners | 1 (100%)" in text

@@ -102,3 +102,14 @@ python -m swing_bot gap-backtest --system options # test the signal on the last 
 - Two setups held up, and both match standard momentum-trading practice. **Calls:** opening-range breakout with heavy opening volume (2.5x or more), out by noon. **Puts:** opening-range breakdown on gaps of 5% or more.
 - With the bot's exact rules (`gap-backtest`), the result is 180 trades, a 49% win rate, and **+0.77% average stock move per trade**, with **+0.59%** on the unseen half. A move of about +0.5% is needed to cover option spreads and time decay. **The edge is thin.**
 - **Caveats:** 60 days is short and covers one market environment. The universe is today's movers (selection bias), and the option profit and loss is not simulated. Paper trade for at least a month and compare against this backtest before risking money.
+
+## Automatic paper trading on GitHub
+
+`.github/workflows/paper-trade.yml` runs the options bot with **fake money** every weekday:
+- It starts at 9:20am New York time, scans the premarket, and trades.
+- The account starts at **$100**, with up to 50% per trade, since smaller trades can't buy a contract.
+- Calls close by noon and everything is closed by 3:00pm.
+- It saves the account to `paper/options_state.json` and the results to **`paper/REPORT.md`**.
+
+To check results, open `paper/REPORT.md` on GitHub. To run it by hand, go to **Actions → Paper trade (options) → Run workflow**.
+To start over, delete `paper/options_state.json`.
