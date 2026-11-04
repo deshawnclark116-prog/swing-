@@ -2,10 +2,11 @@
 # Scans the whole US market for runners, buys new premarket highs, sells by 9:35am.
 name: Premarket paper trade
 
+# TURNED OFF (we're sticking to options). To turn it back on, restore these two lines under "on:":
+#   schedule:
+#     - cron: "2 8 * * 1-5"   # 4:02am New York during daylight saving time
+#     - cron: "2 9 * * 1-5"   # 4:02am New York during standard time
 on:
-  schedule:
-    - cron: "2 8 * * 1-5"   # 4:02am New York during daylight saving time
-    - cron: "2 9 * * 1-5"   # 4:02am New York during standard time
   workflow_dispatch: {}
 
 permissions:

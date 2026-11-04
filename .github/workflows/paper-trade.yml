@@ -1,4 +1,4 @@
-# Runs BOTH day-trading bots with FAKE money every weekday morning ($100 each),
+# Runs the OPTIONS day-trading bot with FAKE money ($100) every weekday morning,
 # then saves the accounts and a results report back to this repo (paper/REPORT.md).
 name: Paper trade
 
@@ -48,24 +48,20 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: pip install pandas numpy yfinance
 
-      - name: Trade (fake money) - both bots side by side
+      - name: Trade options (fake money)
         if: steps.gate.outputs.go == 'true'
         run: |
           # save the accounts + REPORT.md every 10 minutes while the bots trade
           ( while sleep 600; do scripts/save_results.sh "Paper trading update $(TZ=America/New_York date '+%F %H:%M')" \
-              paper/options_state.json paper/stocks_state.json; done ) &
+              paper/options_state.json; done ) &
           SAVER=$!
           python -u -m swing_bot options-trade --state paper/options_state.json \
             --cash 100 --budget-pct 0.5 --exit-time 14:45 2>&1 \
             | grep --line-buffered -v -i "crumb\|failed download\|delisted\|possibly" | sed -u 's/^/[options] /' &
           P1=$!
-          python -u -m swing_bot stocks-trade --state paper/stocks_state.json \
-            --cash 100 --budget-pct 0.5 --exit-time 14:45 2>&1 \
-            | grep --line-buffered -v -i "crumb\|failed download\|delisted\|possibly" | sed -u 's/^/[stocks] /' &
-          P2=$!
-          wait $P1 $P2 || true
+          wait $P1 || true
           kill $SAVER || true
 
       - name: Save results to the repo
         if: always() && steps.gate.outputs.go == 'true'
-        run: scripts/save_results.sh "Paper trading results $(TZ=America/New_York date +%F)" paper/options_state.json paper/stocks_state.json
+        run: scripts/save_results.sh "Paper trading results $(TZ=America/New_York date +%F)" paper/options_state.json

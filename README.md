@@ -105,9 +105,9 @@ python -m swing_bot gap-backtest --system options # test the signal on the last 
 
 ## Automatic paper trading on GitHub
 
-`.github/workflows/paper-trade.yml` runs **both bots** with **fake money** every weekday:
+`.github/workflows/paper-trade.yml` runs the **options bot** with **fake money** every weekday. The small-cap stock bot and the premarket runner bot are **turned off**: we're sticking to options. Their code and past fake trades are kept:
 - They start at 9:20am New York time, scan the premarket, and trade.
-- **Each bot has its own $100**, with up to 50% per trade.
+- The bot has **$100**, with up to 50% per trade.
 - Calls close by noon and everything is closed by 3:00pm.
 - The accounts are saved to `paper/options_state.json` and `paper/stocks_state.json`, and the combined results go to **`paper/REPORT.md`**.
 
