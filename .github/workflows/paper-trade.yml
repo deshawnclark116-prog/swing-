@@ -4,11 +4,12 @@ name: Paper trade
 
 on:
   schedule:
-    # GitHub schedules use UTC. These two cover 9:20am New York time in both
-    # daylight saving (13:20 UTC) and standard time (14:20 UTC); the gate step
-    # below makes sure only the right one actually trades.
-    - cron: "20 13 * * 1-5"
-    - cron: "20 14 * * 1-5"
+    # GitHub schedules use UTC. These two cover 9:05am New York time in both
+    # daylight saving (13:05 UTC) and standard time (14:05 UTC); the gate step
+    # below makes sure only the right one actually trades. GitHub often starts
+    # scheduled runs late, so we aim early and accept starts up to 10:45.
+    - cron: "5 13 * * 1-5"
+    - cron: "5 14 * * 1-5"
   workflow_dispatch: {}   # "Run workflow" button for a manual run
 
 permissions:
@@ -28,7 +29,7 @@ jobs:
         run: |
           NOW=$(TZ=America/New_York date +%H%M)
           echo "New York time: $NOW"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$NOW" -ge 0900 ] && [ "$NOW" -le 1015 ]; }; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$NOW" -ge 0855 ] && [ "$NOW" -le 1045 ]; }; then
             echo "go=true" >> "$GITHUB_OUTPUT"
           else
             echo "go=false" >> "$GITHUB_OUTPUT"; echo "Not market-open time - skipping."
@@ -51,9 +52,9 @@ jobs:
         if: steps.gate.outputs.go == 'true'
         run: |
           python -m swing_bot options-trade --state paper/options_state.json \
-            --cash 100 --budget-pct 0.5 --exit-time 15:00 > options.log 2>&1 &
+            --cash 100 --budget-pct 0.5 --exit-time 14:45 > options.log 2>&1 &
           python -m swing_bot stocks-trade --state paper/stocks_state.json \
-            --cash 100 --budget-pct 0.5 --exit-time 15:00 > stocks.log 2>&1 &
+            --cash 100 --budget-pct 0.5 --exit-time 14:45 > stocks.log 2>&1 &
           wait || true
           echo "===== OPTIONS BOT ====="; grep -v -i crumb options.log || true
           echo "===== STOCK BOT ====="; grep -v -i crumb stocks.log || true
