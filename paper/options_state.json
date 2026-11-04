@@ -1,0 +1,16 @@
+{
+  "positions": {},
+  "day": {
+    "date": "2026-11-03",
+    "trades": 0,
+    "realized": 0.0,
+    "start_cash": 100.0,
+    "traded": []
+  },
+  "log": [],
+  "account": {
+    "settled": 100.0,
+    "unsettled": []
+  },
+  "starting_cash": 100.0
+}
