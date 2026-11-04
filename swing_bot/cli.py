@@ -186,6 +186,36 @@ def cmd_stocks_trade(args, cfg) -> int:
     return _loop_or_once(StockDayTrader(broker, syms, rules=rules, dry_run=args.dry_run), args)
 
 
+def cmd_premarket_trade(args, cfg) -> int:
+    from .premarket_trader import PremarketTrader
+    from .stock_daytrade import PaperStockBroker
+
+    broker = PaperStockBroker(args.state or "premarket_paper_state.json", starting_cash=args.cash,
+                              slippage_pct=0.01)  # premarket spreads are wide
+    from datetime import time as dtime
+
+    from .premarket_trader import PremarketRules
+
+    rules = PremarketRules()
+    if args.budget_pct:
+        rules.budget_pct = args.budget_pct
+    if args.exit_time:
+        rules.exit_time = dtime.fromisoformat(args.exit_time)
+    trader = PremarketTrader(broker, rules, dry_run=args.dry_run)
+    if args.once:
+        from datetime import datetime
+
+        from .premarket import NY
+
+        now = datetime.now(NY)
+        trader.rescan(now)
+        events = trader.step(now)
+        print("\n".join(events) if events else "no signals / no exits right now")
+        return 0
+    trader.run()
+    return 0
+
+
 def cmd_gap_backtest(args, cfg) -> int:
     from . import gap_backtest
     from .premarket import OPTIONS_SCAN, SMALLCAP_SCAN, screener_quotes, yahoo_intraday
@@ -226,7 +256,7 @@ def cmd_accounts(args, cfg) -> int:
 def cmd_report(args, cfg) -> int:
     from .report import full_report
 
-    text = full_report(args.state, args.stocks_state)
+    text = full_report(args.state, args.stocks_state, args.premarket_state)
     if args.out:
         from pathlib import Path
 
@@ -281,7 +311,8 @@ def main(argv: list[str] | None = None) -> int:
     pm.set_defaults(func=cmd_premarket, **{**none, "cash": 5_000})
 
     for name, fn, helptext in (("options-trade", cmd_options_trade, "System 1: day trade options"),
-                               ("stocks-trade", cmd_stocks_trade, "System 2: day trade small-cap shares")):
+                               ("stocks-trade", cmd_stocks_trade, "System 2: day trade small-cap shares"),
+                               ("premarket-trade", cmd_premarket_trade, "System 3: premarket runners (paper)")):
         sp = sub.add_parser(name, help=helptext)
         sp.add_argument("--broker", default="paper", choices=["paper", "alpaca"])
         sp.add_argument("--cash", type=float, default=5_000, help="starting cash for the paper account")
@@ -302,6 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     rp = sub.add_parser("report", help="write a Markdown results report for a paper options account")
     rp.add_argument("--state", default="options_paper_state.json", help="options paper account")
     rp.add_argument("--stocks-state", help="stocks paper account (optional)")
+    rp.add_argument("--premarket-state", help="premarket paper account (optional)")
     rp.add_argument("--out", help="file to write (default: print)")
     rp.set_defaults(func=cmd_report, **none)
 

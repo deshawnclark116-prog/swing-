@@ -61,9 +61,12 @@ def options_report(state_file: str | Path) -> str:
         account_section("Options bot", state_file, 100).replace("## Options bot\n\n", "")
 
 
-def full_report(options_state: str | Path, stocks_state: str | Path | None = None) -> str:
+def full_report(options_state: str | Path, stocks_state: str | Path | None = None,
+                premarket_state: str | Path | None = None) -> str:
     parts = [f"# Paper trading results (fake money)\n\n_Updated {_now()}_\n",
              account_section("Options bot (System 1)", options_state, 100)]
     if stocks_state:
         parts.append(account_section("Small-cap stock bot (System 2)", stocks_state, 1))
+    if premarket_state:
+        parts.append(account_section("Premarket runner bot (System 3)", premarket_state, 1))
     return "\n".join(parts)

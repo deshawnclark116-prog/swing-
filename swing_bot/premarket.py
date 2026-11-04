@@ -201,3 +201,51 @@ SMALLCAP_SCAN = ScanConfig(
     screeners=("small_cap_gainers", "aggressive_small_caps", "day_gainers", "most_actives"),
     watchlist=[],
 )
+
+
+# ---------------------------------------------------------------- full-market scan
+NASDAQ_SCREENER = "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=10000&download=true"
+
+
+def nasdaq_symbols(min_price: float = 0.2, max_price: float = 20.0) -> list[str]:
+    """Every plain US-listed ticker (NYSE/Nasdaq/AMEX) in a price range, from Nasdaq's free screener."""
+    import re
+
+    import requests
+
+    r = requests.get(NASDAQ_SCREENER, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                     timeout=30)
+    r.raise_for_status()
+    out = []
+    for row in r.json()["data"]["rows"]:
+        sym = row.get("symbol", "")
+        try:
+            px = float(row["lastsale"].replace("$", "").replace(",", ""))
+        except (ValueError, KeyError, AttributeError):
+            continue
+        if re.fullmatch(r"[A-Z]{1,5}", sym) and min_price <= px <= max_price:
+            out.append(sym)
+    return out
+
+
+def full_market_gappers(min_gap_pct: float = 10.0, min_price: float = 0.2, max_price: float = 20.0,
+                        symbols: list[str] | None = None, chunk: int = 400, top: int = 25) -> pd.DataFrame:
+    """Scan every stock in the price range for today's premarket gap (takes a few minutes)."""
+    symbols = symbols or nasdaq_symbols(min_price * 0.5, max_price * 1.5)
+    today = pd.Timestamp.now(tz=NY).date()
+    rows = []
+    for i in range(0, len(symbols), chunk):
+        part = symbols[i:i + chunk]
+        try:
+            bars = yahoo_intraday(part, period="2d", interval="5m")
+        except Exception as e:
+            log.warning("scan chunk failed: %s", e)
+            continue
+        for sym, df in bars.items():
+            st = premarket_stats(df, today)
+            if st and st["gap_pct"] >= min_gap_pct and min_price <= st["pm_last"] <= max_price:
+                rows.append({"symbol": sym, **st})
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    return df.sort_values("gap_pct", ascending=False).head(top).reset_index(drop=True)

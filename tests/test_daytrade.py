@@ -223,3 +223,36 @@ def test_report_renders(tmp_path):
     broker.sell(c.symbol, 1.30, "time", at(12, 0))
     text = options_report(tmp_path / "o.json")
     assert "Started with | $200.00" in text and "$+25.00" in text and "| Winners | 1 (100%)" in text
+
+
+# ---------------------------------------------------------------- premarket runner bot
+def test_premarket_trader_buys_new_high_and_stops(tmp_path):
+    from swing_bot.premarket_trader import PremarketRules, PremarketTrader
+    broker = PaperStockBroker(tmp_path / "p.json", starting_cash=100, slippage_pct=0)
+    # yesterday close 1.00; premarket 1.15, 1.18, then 1.25 = new high (+25%)
+    df = make_day([1.15, 1.18, 1.25], [], prev_close=1.0)
+    t = PremarketTrader(broker, PremarketRules(), scanner=None, bars_loader=lambda s: {"ABC": df})
+    t.watch = ["ABC"]
+    events = t.step(datetime.combine(DAY, time(8, 3), NY))
+    assert any(e.startswith("BUY") for e in events), events
+    p = broker.positions["ABC"]
+    assert p.qty == 39 and p.stop == pytest.approx(1.25 * 0.88)       # 50% of $100 at ~$1.26
+    # not a new high anymore -> no second buy; then it collapses through the stop
+    crash = pd.concat([df, make_day([1.0], []).iloc[1:].set_axis([pd.Timestamp(datetime.combine(DAY, time(8, 3), NY))])])
+    t.bars_loader = lambda s: {"ABC": crash}
+    events = t.step(datetime.combine(DAY, time(8, 4), NY))
+    assert any("(stop)" in e for e in events) and not broker.positions
+
+
+def test_premarket_trader_ignores_non_runners_and_sells_at_open(tmp_path):
+    from swing_bot.premarket_trader import PremarketRules, PremarketTrader
+    broker = PaperStockBroker(tmp_path / "p.json", starting_cash=100, slippage_pct=0)
+    flat = make_day([1.02, 1.03, 1.05], [], prev_close=1.0)              # only +5%
+    t = PremarketTrader(broker, PremarketRules(), scanner=None, bars_loader=lambda s: {"ABC": flat})
+    t.watch = ["ABC"]
+    assert not t.step(datetime.combine(DAY, time(8, 3), NY))
+    run = make_day([1.15, 1.18, 1.25], [1.30], prev_close=1.0)
+    t.bars_loader = lambda s: {"ABC": run}
+    t.step(datetime.combine(DAY, time(8, 3), NY))
+    events = t.step(datetime.combine(DAY, time(9, 40), NY))
+    assert any("(time)" in e for e in events)

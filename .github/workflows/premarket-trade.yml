@@ -1,0 +1,68 @@
+# System 3: premarket runner bot with FAKE money ($100), every weekday from 4am New York time.
+# Scans the whole US market for runners, buys new premarket highs, sells by 9:35am.
+name: Premarket paper trade
+
+on:
+  schedule:
+    - cron: "2 8 * * 1-5"   # 4:02am New York during daylight saving time
+    - cron: "2 9 * * 1-5"   # 4:02am New York during standard time
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: premarket-trade
+  cancel-in-progress: false
+
+jobs:
+  trade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Only run around 4am New York time
+        id: gate
+        run: |
+          NOW=$(TZ=America/New_York date +%H%M)
+          echo "New York time: $NOW"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$NOW" -ge 0350 ] && [ "$NOW" -le 0600 ]; }; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"; echo "Not 4am New York time - skipping."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        if: steps.gate.outputs.go == 'true'
+        run: pip install pandas numpy yfinance requests
+
+      - name: Trade premarket runners (fake money)
+        if: steps.gate.outputs.go == 'true'
+        run: |
+          python -m swing_bot premarket-trade --state paper/premarket_state.json \
+            --cash 100 --budget-pct 0.5 --exit-time 09:35 2>&1 \
+            | grep -v -i "crumb\|failed download\|delisted\|possibly\|^\[" || true
+
+      - name: Save results to the repo
+        if: always() && steps.gate.outputs.go == 'true'
+        run: |
+          git config user.name "paper-trading-bot"
+          git config user.email "paper-trading-bot@users.noreply.github.com"
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" || true
+            python -m swing_bot report --state paper/options_state.json \
+              --stocks-state paper/stocks_state.json --premarket-state paper/premarket_state.json \
+              --out paper/REPORT.md
+            git add paper/
+            git commit -m "Premarket paper results $(TZ=America/New_York date +%F)" || { echo "nothing to save"; break; }
+            git push origin "HEAD:${GITHUB_REF_NAME}" && break
+            sleep 5
+          done

@@ -62,7 +62,8 @@ jobs:
         if: always() && steps.gate.outputs.go == 'true'
         run: |
           python -m swing_bot report --state paper/options_state.json \
-            --stocks-state paper/stocks_state.json --out paper/REPORT.md
+            --stocks-state paper/stocks_state.json --premarket-state paper/premarket_state.json \
+            --out paper/REPORT.md
           git config user.name "paper-trading-bot"
           git config user.email "paper-trading-bot@users.noreply.github.com"
           git add paper/
