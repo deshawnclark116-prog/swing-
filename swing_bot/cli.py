@@ -89,6 +89,126 @@ def cmd_status(args, cfg: BotConfig) -> int:
     return 0
 
 
+# ====================================================================== day trading
+def _scan_both(args):
+    from .premarket import OPTIONS_SCAN, SMALLCAP_SCAN, scan
+
+    opt = scan(OPTIONS_SCAN, with_news=not args.no_news)
+    small = scan(SMALLCAP_SCAN, with_news=not args.no_news)
+    return opt, small
+
+
+def _print_scan(title, df, extra=None):
+    print(f"\n=== {title} ===")
+    if df.empty:
+        print("  nothing qualifies right now")
+        return
+    print(f"  (premarket session of {df['date'].iloc[0]})")
+    for _, r in df.iterrows():
+        print(f"  {r.symbol:6} {r.gap_pct:+6.1f}%  ${r.pm_last:<8.2f} PM high {r.pm_high:.2f} / low {r.pm_low:.2f}"
+              f"   avg vol {r.avg_volume / 1e6:.1f}M")
+        if extra:
+            line = extra(r)
+            if line:
+                print(f"         {line}")
+        if isinstance(r.get("news"), str) and r["news"]:
+            for h in r["news"].split(" | "):
+                print(f"         news: {h}")
+
+
+def cmd_premarket(args, cfg) -> int:
+    from .options_chain import pick_contract
+
+    opt, small = _scan_both(args)
+    budget = args.cash * 0.10
+
+    def contract_line(r):
+        c = pick_contract(r.symbol, r.direction, r.pm_last, budget)
+        return f"{r.direction.upper()}: {c}" if c else f"{r.direction.upper()}: no liquid contract within ${budget:,.0f}"
+
+    _print_scan("SYSTEM 1 - OPTIONS (liquid names, calls on gap-ups / puts on gap-downs)", opt, contract_line)
+    _print_scan("SYSTEM 2 - SMALL-CAP SHARES (gap-ups, $1-$20)", small)
+    print("\nEntry trigger after 9:30: a 1-min close above the premarket high (calls/shares) "
+          "or below the premarket low (puts), on the right side of VWAP.")
+    return 0
+
+
+def _loop_or_once(trader, args):
+    from datetime import datetime
+
+    from .premarket import NY
+
+    if args.once:
+        events = trader.step(datetime.now(NY))
+        print("\n".join(events) if events else "no signals / no exits right now")
+    else:
+        trader.run()
+    return 0
+
+
+def cmd_options_trade(args, cfg) -> int:
+    from .daytrade import AlpacaOptionsBroker, OptionsDayTrader, PaperOptionsBroker
+    from .premarket import OPTIONS_SCAN, scan
+
+    watch = scan(OPTIONS_SCAN, with_news=False)
+    watch_map = dict(zip(watch["symbol"], watch["direction"])) if not watch.empty else {}
+    print(f"Watching: {watch_map or 'nothing'}")
+    broker = AlpacaOptionsBroker() if args.broker == "alpaca" else PaperOptionsBroker(starting_cash=args.cash)
+    return _loop_or_once(OptionsDayTrader(broker, watch_map, dry_run=args.dry_run), args)
+
+
+def cmd_stocks_trade(args, cfg) -> int:
+    from .premarket import SMALLCAP_SCAN, scan
+    from .stock_daytrade import AlpacaStockBroker, PaperStockBroker, StockDayTrader
+
+    watch = scan(SMALLCAP_SCAN, with_news=False)
+    syms = list(watch["symbol"]) if not watch.empty else []
+    print(f"Watching: {syms or 'nothing'}")
+    broker = AlpacaStockBroker() if args.broker == "alpaca" else PaperStockBroker(starting_cash=args.cash)
+    return _loop_or_once(StockDayTrader(broker, syms, dry_run=args.dry_run), args)
+
+
+def cmd_gap_backtest(args, cfg) -> int:
+    from . import gap_backtest
+    from .premarket import OPTIONS_SCAN, SMALLCAP_SCAN, screener_quotes, yahoo_intraday
+
+    sc = OPTIONS_SCAN if args.system == "options" else SMALLCAP_SCAN
+    universe = sorted(set(args.symbols or []) or (set(screener_quotes(sc.screeners)) | set(sc.watchlist)))
+    print(f"Backtesting gap-and-go on {len(universe)} symbols, 5-min bars, last ~60 days...")
+    bars = yahoo_intraday(universe, period="60d", interval="5m")
+    # apply the system's price filter using each symbol's latest price
+    bars = {s: d for s, d in bars.items() if sc.min_price <= d["close"].iloc[-1] <= sc.max_price}
+    trades = gap_backtest.run(bars, min_gap_pct=sc.min_gap_pct, stock_stop_pct=args.stock_stop)
+    if args.system == "smallcap" and not trades.empty:
+        trades = trades[trades["kind"] == "call"]  # long only
+    print(gap_backtest.summarize(trades))
+    print("\nNote: the universe is today's movers, so this is optimistic (survivorship/selection bias).")
+    if args.trades_csv and not trades.empty:
+        trades.to_csv(args.trades_csv, index=False)
+    return 0
+
+
+def cmd_accounts(args, cfg) -> int:
+    from .daytrade import PaperOptionsBroker
+    from .stock_daytrade import PaperStockBroker
+
+    for title, b in (("OPTIONS paper account", PaperOptionsBroker()), ("STOCKS paper account", PaperStockBroker())):
+        a = b.account
+        print(f"\n=== {title} ===\n  settled cash ${a.settled:,.2f}   unsettled ${a.pending:,.2f}")
+        print(f"  today: {b.day}")
+        for k, p in b.positions.items():
+            print(f"  open: {k} {asdict_safe(p)}")
+        for e in b.log[-10:]:
+            print(f"  log: {e}")
+    return 0
+
+
+def asdict_safe(obj):
+    from dataclasses import asdict
+
+    return {k: v for k, v in asdict(obj).items() if k != "contract"}
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="swing_bot", description="Daily swing-trading bot")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -119,6 +239,32 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("status", help="show the local paper account")
     st.add_argument("--state", default="paper_state.json")
     st.set_defaults(func=cmd_status, symbols=None, cash=None, risk=None, max_positions=None)
+
+    none = dict(symbols=None, cash=None, risk=None, max_positions=None)
+
+    pm = sub.add_parser("premarket", help="morning scan: options plays + small-cap plays + news")
+    pm.add_argument("--cash", type=float, default=5_000, help="account size (sets option budget)")
+    pm.add_argument("--no-news", action="store_true")
+    pm.set_defaults(func=cmd_premarket, **{**none, "cash": 5_000})
+
+    for name, fn, helptext in (("options-trade", cmd_options_trade, "System 1: day trade options"),
+                               ("stocks-trade", cmd_stocks_trade, "System 2: day trade small-cap shares")):
+        sp = sub.add_parser(name, help=helptext)
+        sp.add_argument("--broker", default="paper", choices=["paper", "alpaca"])
+        sp.add_argument("--cash", type=float, default=5_000, help="starting cash for the paper account")
+        sp.add_argument("--dry-run", action="store_true", help="show trades without placing them")
+        sp.add_argument("--once", action="store_true", help="run one check instead of looping all day")
+        sp.set_defaults(func=fn, **{**none, "cash": 5_000})
+
+    gb = sub.add_parser("gap-backtest", help="test the gap-and-go signal on the last ~60 days")
+    gb.add_argument("--system", default="options", choices=["options", "smallcap"])
+    gb.add_argument("--symbols", nargs="+")
+    gb.add_argument("--stock-stop", type=float, default=1.5, help="stop, %% move against the stock")
+    gb.add_argument("--trades-csv")
+    gb.set_defaults(func=cmd_gap_backtest, cash=None, risk=None, max_positions=None)
+
+    ac = sub.add_parser("accounts", help="show both day-trading paper accounts")
+    ac.set_defaults(func=cmd_accounts, **none)
 
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.WARNING,

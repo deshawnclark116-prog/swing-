@@ -63,3 +63,31 @@ pytest -q
 ```
 
 The tests cover indicators, sizing, fill and stop mechanics, the paper bot cycle, and a **no-look-ahead** check. That check confirms that adding future bars never changes past signals.
+
+---
+
+# Day trading (cash account)
+
+There are two separate systems, because most small caps have no tradeable options.
+
+| | System 1: options | System 2: small-cap shares |
+|---|---|---|
+| Stocks | Liquid names with tight option spreads | $1–$20 stocks gapping 10% or more |
+| Direction | Calls on gap-ups, puts on gap-downs | Long only (a cash account can't short) |
+| Entry | First 1-min close beyond the premarket high or low, on the right side of VWAP | Same, upside only |
+| Exits | Premium -30% stop, +100% target, trailing stop after +30%, stock loses VWAP, 3:45pm | Stop below the signal bar or VWAP (5% max), breakeven at +1R, 2R target, loses VWAP, 3:45pm |
+| Sizing | 10% of settled cash per trade | Risk 2% of settled cash, at most 25% in one position |
+
+Both systems trade only with **settled** cash (T+1), so they can't cause good-faith violations. Each is limited to 3 trades a day and stops trading for the day after a set loss.
+
+```bash
+python -m swing_bot premarket --cash 5000         # morning scan for both systems, with suggested contracts
+python -m swing_bot options-trade --dry-run       # System 1; loops from the open (--once for a single check)
+python -m swing_bot stocks-trade --dry-run        # System 2
+python -m swing_bot options-trade                 # paper trade (local simulated cash account)
+python -m swing_bot options-trade --broker alpaca # Alpaca paper account
+python -m swing_bot accounts                      # paper account balances, positions, and log
+python -m swing_bot gap-backtest --system options # test the signal on the last ~60 days
+```
+
+**Data limits:** Yahoo's free data is delayed, doesn't report premarket volume, and its movers lists don't show fresh premarket gappers. For live use, switch the data source to Alpaca or another real-time feed.
